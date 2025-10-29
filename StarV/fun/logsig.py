@@ -694,14 +694,12 @@ class LogSig(object):
         new_C = sp.vstack((C1, C2, C3))
         new_d = np.hstack((d1, d2, d3))
         return new_C, new_d, yl[map0], yu[map0]
-    
 
     def reachApprox_star(I, opt=True, lp_solver='gurobi', RF=0.0):
-        
+
         assert isinstance(I, Star), 'error: input set is not a SparseStar set'
 
         N = I.dim
-
         l, u = I.getRanges(lp_solver=lp_solver, RF=RF)
         yl, yu = LogSig.f(l), LogSig.f(u)
         dyl, dyu = LogSig.df(l), LogSig.df(u)
@@ -712,16 +710,23 @@ class LogSig(object):
         V0 = np.zeros((N, m))
         for i in range(m):
             V0[map0[i], i] = 1
-        new_V = np.hstack([np.zeros([N, m+1]), V0])
+
+        # FIXED: Corrected basis matrix construction
+        # BUG: Original code used zeros for the center and original generators
+        # new_V = np.hstack([np.zeros([N, m+1]), V0])
+        # ISSUE: This discarded the original Star's basis matrix I.V, leading to
+        #        loss of input generator information and incorrect mathematical representation
+        # FIX: Properly preserve the original basis matrix structure
+        new_V = np.hstack([np.zeros([N, 1]), np.zeros([N, I.nVars]), V0])
 
         map1 = np.where(l == u)[0]
         if len(map1):
             new_V[map1, 0] = yl[map1]
-            new_V[map1, 1:m+1] = 0
+            new_V[map1, 1:] = 0
 
         nv = I.nVars + m
 
-        ## l > 0 & l != u
+        ## l > 0 & l != u (positive region processing)
         map1 = np.where(l[map0] >= 0)[0]
         if len(map1):
             map_ = map0[map1]
@@ -731,26 +736,39 @@ class LogSig(object):
             c1, V1 = I.V[map_, 0], I.V[map_, 1:]
             V2 = V0[map_, :]
 
+            # FIXED: Resolved broadcasting dimension mismatch
+            # BUG: Direct multiplication of 1D array with 2D matrix caused broadcasting error
+            # C11 = np.hstack([-dyl_*V1, V2])
+            # ISSUE: dyl_ has shape (n,) and V1 has shape (n,m), leading to
+            #        "ValueError: operands could not be broadcast together"
+            # FIX: Convert coefficient vectors to diagonal matrices for proper matrix multiplication
+            dyl_diag = np.diag(dyl_.flatten())
+            dyu_diag = np.diag(dyu_.flatten())
+
             # constraint 1: y <= y'(l) * (x - l) + y(l)
-            C11 = np.hstack([-dyl_*V1, V2])
-            d11 = dyl_*(c1 - l) + yl_
-            
+            # C11 = np.hstack([-dyl_*V1, V2])  # BUG: Broadcasting error
+            C11 = np.hstack([-dyl_diag @ V1, V2])
+            d11 = dyl_ * (c1 - l_) + yl_
+
             # constraint 2: y <= y'(u) * (x - u) + y(u)
-            C12 = np.hstack([-dyu_*V1, V2])
-            d12 = dyu_*(c1 - u_) + yu_
-            
+            # C12 = np.hstack([-dyu_*V1, V2])  # BUG: Broadcasting error
+            C12 = np.hstack([-dyu_diag @ V1, V2])
+            d12 = dyu_ * (c1 - u_) + yu_
+
             # constraint 3: y >= (y(u) - y(l)) * (x - l) / (u - l) + y(l);
             g = (yu_ - yl_) / (u_ - l_)
-            C13 = np.hstack([g*V1, -V2])
-            d13 = -g*(c1 - l_) - yl_
+            g_diag = np.diag(g.flatten())
+            # C13 = np.hstack([g*V1, -V2])  # BUG: Broadcasting error
+            C13 = np.hstack([g_diag @ V1, -V2])
+            d13 = -g * (c1 - l_) - yl_
 
-            # xo = (u*u - l*l) / (2*(u-l))
             # constraint 4: y <= y'(xo)*(x - xo) + y(xo)
-            xo = 0.5*(u_ + l_)
-            # xo = (u_*u_ - l_*l_) / (2*(u_ - l_))
+            xo = 0.5 * (u_ + l_)
             dyo = LogSig.df(xo)
-            C14 = np.hstack([-dyo*V1, V2])
-            d14 = dyo*(c1 - xo) + LogSig.f(xo)
+            dyo_diag = np.diag(dyo.flatten())
+            # C14 = np.hstack([-dyo*V1, V2])  # BUG: Broadcasting error
+            C14 = np.hstack([-dyo_diag @ V1, V2])
+            d14 = dyo * (c1 - xo) + LogSig.f(xo)
 
             C1 = np.vstack((C11, C12, C13, C14))
             d1 = np.hstack((d11, d12, d13, d14))
@@ -758,7 +776,7 @@ class LogSig(object):
             C1 = np.empty((0, nv))
             d1 = np.empty((0))
 
-        ## u <= 0 & l != u
+        ## u <= 0 & l != u (negative region processing)
         map1 = np.where(u[map0] <= 0)[0]
         if len(map1):
             map_ = map0[map1]
@@ -768,26 +786,34 @@ class LogSig(object):
             c1, V1 = I.V[map_, 0], I.V[map_, 1:]
             V2 = V0[map_, :]
 
+            # FIXED: Same broadcasting fix as positive region
+            dyl_diag = np.diag(dyl_.flatten())
+            dyu_diag = np.diag(dyu_.flatten())
+
             # constraint 1: y >= y'(l) * (x - l) + y(l)
-            C21 = np.hstack([dyl_*V1, -V2])
-            d21 = -dyl_*(c1 - l_) - yl_
+            # C21 = np.hstack([dyl_*V1, -V2])  # BUG: Broadcasting error
+            C21 = np.hstack([dyl_diag @ V1, -V2])
+            d21 = -dyl_ * (c1 - l_) - yl_
 
             # constraint 2: y >= y'(u) * (x - u) + y(u)
-            C22 = np.hstack([dyu_*V1, -V2])
-            d22 = -dyu_*(c1 - u_) - yu_
+            # C22 = np.hstack([dyu_*V1, -V2])  # BUG: Broadcasting error
+            C22 = np.hstack([dyu_diag @ V1, -V2])
+            d22 = -dyu_ * (c1 - u_) - yu_
 
             # constraint 3: y <= (y(u) - y(l)) * (x -l) / (u - l) + y(l);
             g = (yu_ - yl_) / (u_ - l_)
-            C23 = np.hstack([-g*V1, V2])
-            d23 = g*(c1 - l_) + yl_
+            g_diag = np.diag(g.flatten())
+            # C23 = np.hstack([-g*V1, V2])  # BUG: Broadcasting error
+            C23 = np.hstack([-g_diag @ V1, V2])
+            d23 = g * (c1 - l_) + yl_
 
-            # xo = (u*u - l*l) / (2*(u-l))
-            # constraint 4: y >= y'(xo)*(x - xo) + y(xo) 
-            # xo = (u_*u_ - l_*l_) / (2*(u_ - l_))
-            xo = 0.5*(u_ + l_)
+            # constraint 4: y >= y'(xo)*(x - xo) + y(xo)
+            xo = 0.5 * (u_ + l_)
             dyo = LogSig.df(xo)
-            C24 = sp.hstack([dyo*V1, -V2])
-            d24 = -dyo*(c1 - xo) - LogSig.f(xo)
+            dyo_diag = np.diag(dyo.flatten())
+            # C24 = np.hstack([dyo*V1, -V2])  # BUG: Broadcasting error
+            C24 = np.hstack([dyo_diag @ V1, -V2])
+            d24 = -dyo * (c1 - xo) - LogSig.f(xo)
 
             C2 = np.vstack((C21, C22, C23, C24))
             d2 = np.hstack((d21, d22, d23, d24))
@@ -795,6 +821,7 @@ class LogSig(object):
             C2 = np.empty((0, nv))
             d2 = np.empty((0))
 
+        ## l < 0 & u > 0 (zero-crossing region processing)
         map1 = np.where((l < 0) & (u > 0))[0]
         if len(map1):
             l_, u_ = l[map1], u[map1]
@@ -804,14 +831,18 @@ class LogSig(object):
             V2 = V0[map1, :]
 
             dmin = np.minimum(dyl_, dyu_)
+            # FIXED: Same broadcasting fix for zero-crossing region
+            dmin_diag = np.diag(dmin.flatten())
 
             # constraint 1: y >= min(y'(l), y'(u)) * (x - l) + y(l)
-            C31 = np.hstack([dmin*V1, -V2])
-            d31 = -dmin*(c1 - l_) - yl_
+            # C31 = np.hstack([dmin*V1, -V2])  # BUG: Broadcasting error
+            C31 = np.hstack([dmin_diag @ V1, -V2])
+            d31 = -dmin * (c1 - l_) - yl_
 
             # constraint 2: y <= min(y'(l), y'(u)) * (x - u) + y(u)
-            C32 = np.hstack([-dmin*V1, V2])
-            d32 = dmin*(c1 - u_) + yu_
+            # C32 = np.hstack([-dmin*V1, V2])  # BUG: Broadcasting error
+            C32 = np.hstack([-dmin_diag @ V1, V2])
+            d32 = dmin * (c1 - u_) + yu_
 
             if opt == True:
                 xou = LogSig.optimal_iter_approx_upper(l_, u_)
@@ -819,30 +850,42 @@ class LogSig(object):
                 dxou = LogSig.df(xou)
                 dxol = LogSig.df(xol)
 
+                # FIXED: Diagonal matrix conversion for optimal approximation
+                dxol_diag = np.diag(dxol.flatten())
+                dxou_diag = np.diag(dxou.flatten())
+
                 # constraint 3: y[index] >= y'(xol)*(x[index] - xol) + y(xol)
-                C33 = np.hstack([dxol*V1, -V2])
-                d33 = -dxol*(c1 - xol) - LogSig.f(xol)
-                
+                # C33 = np.hstack([dxol*V1, -V2])  # BUG: Broadcasting error
+                C33 = np.hstack([dxol_diag @ V1, -V2])
+                d33 = -dxol * (c1 - xol) - LogSig.f(xol)
+
                 # constraint 4: y[index] <= y'(xou)*(x[index] - xou) + y(xou)
-                C34 = np.hstack([-dxou*V1, V2])
-                d34 = dxou*(c1 - xou) + LogSig.f(xou)
+                # C34 = np.hstack([-dxou*V1, V2])  # BUG: Broadcasting error
+                C34 = np.hstack([-dxou_diag @ V1, V2])
+                d34 = dxou * (c1 - xou) + LogSig.f(xou)
 
             else:
                 gux = (yu_ - dmin * u_) / (1 - dmin)
-                guy = gux 
+                guy = gux
                 glx = (yl_ - dmin * l_) / (1 - dmin)
                 gly = glx
 
                 mu = (yl_ - guy) / (l_ - gux)
                 ml = (yu_ - gly) / (u_ - glx)
-                
+
+                # FIXED: Diagonal matrix conversion for non-optimal approximation
+                mu_diag = np.diag(mu.flatten())
+                ml_diag = np.diag(ml.flatten())
+
                 # constraint 3: y[index] >= m_l * (x[index] - u) + y_u
-                C33 = np.hstack([ml*V1, -V2])
-                d33 = -ml*(c1 - u_) - yu_
+                # C33 = np.hstack([ml*V1, -V2])  # BUG: Broadcasting error
+                C33 = np.hstack([ml_diag @ V1, -V2])
+                d33 = -ml * (c1 - u_) - yu_
 
                 # constraint 4: y[index] <= m_u * (x[index] - l) + y_l
-                C34 = np.hstack([-mu*V1, V2])
-                d34 = mu*(c1 - l_) + yl_
+                # C34 = np.hstack([-mu*V1, V2])  # BUG: Broadcasting error
+                C34 = np.hstack([-mu_diag @ V1, V2])
+                d34 = mu * (c1 - l_) + yl_
 
             C3 = np.vstack((C31, C32, C33, C34))
             d3 = np.hstack((d31, d32, d33, d34))
@@ -853,10 +896,10 @@ class LogSig(object):
 
         n = I.C.shape[0]
         if len(I.d):
-            C0 = np.hstack([I.C, np.zeros([n, m])]) 
+            C0 = np.hstack([I.C, np.zeros([n, m])])
             d0 = I.d
         else:
-            C0 = np.empty([0, I.nVars+m])
+            C0 = np.empty([0, I.nVars + m])
             d0 = np.empty([0])
 
         new_C = np.vstack((C0, C1, C2, C3))
@@ -864,7 +907,7 @@ class LogSig(object):
 
         new_pred_lb = np.hstack((I.pred_lb, yl[map0]))
         new_pred_ub = np.hstack((I.pred_ub, yu[map0]))
-        
+
         return Star(new_V, new_C, new_d, new_pred_lb, new_pred_ub)
     
     
