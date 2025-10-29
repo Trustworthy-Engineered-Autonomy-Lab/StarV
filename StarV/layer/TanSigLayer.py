@@ -1,3 +1,18 @@
+#########################################################################
+##   This file is part of the StarV verifier                           ##
+##                                                                     ##
+##   Copyright (c) 2025 The StarV Team                                 ##
+##   License: BSD-3-Clause                                             ##
+##                                                                     ##
+##   Primary contacts: Hoang Dung Tran <dungtran@ufl.edu> (UF)         ##
+##                     Sung Woo Choi <sungwoo.choi@ufl.edu> (UF)       ##
+##                     Yuntao Li <yli17@ufl.edu> (UF)                  ##
+##                     Qing Liu <qliu1@ufl.edu> (UF)                   ##
+##                                                                     ##
+##   See CONTRIBUTORS for full author contacts and affiliations.       ##
+##   This program is licensed under the BSD 3‑Clause License; see the  ##
+##   LICENSE file in the root directory.                               ##
+#########################################################################
 """
 TanSig layer class
 Sung Woo Choi, 04/11/2023
@@ -19,7 +34,7 @@ class TanSigLayer(object):
     @staticmethod
     def evaluate(x):
         return TanSig.f(x)
-    
+
     def reach(self, In, method='approx', lp_solver='gurobi', pool=None, RF=0.0, DR=0, show=False):
         """main reachability method
             Args:
@@ -31,7 +46,7 @@ class TanSigLayer(object):
                 @DR: depth reduction from 1 to k-Layers (0 by default)
 
             Return:
-                @R: a reachable set        
+                @R: a reachable set
         """
 
         if method == 'exact':
