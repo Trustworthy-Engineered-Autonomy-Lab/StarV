@@ -30,8 +30,8 @@ class SatLinsLayer(object):
             Return: 
                @R: a list of reachable set
         """
-
-        print("\nSatLinsLayer reach function\n")
+        if show:
+            print("\nSatLinsLayer reach function\n")
 
         if method == 'exact':
             return SatLins.reachExactMultiInputs(In, lp_solver, pool)
